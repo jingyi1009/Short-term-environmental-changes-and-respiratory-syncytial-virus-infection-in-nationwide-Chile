@@ -6,7 +6,7 @@ This repository contains the data and analysis code used in our study on associa
 ## Data
 We uploaded the cleaned version of the data analyzed in our study on the **Data** branch.
 The `data` folder includes:
-1. **Map of Chile**: Shapefile of Chile.
+1. **Map of Chile**: Shapefile of Chile (cl_shp).
 2. **Region Coordinates**: CSV file (Lonlat) containing the longitude and latitude of 16 Chilean regions.
 3. **Environmental Data**: CSV file with regional environmental factors of Chile.
 4. **RSV Data**: Access can be obtained by contacting the Public Health Institute of Chile, contact email: rfasce@ispch.cl.
