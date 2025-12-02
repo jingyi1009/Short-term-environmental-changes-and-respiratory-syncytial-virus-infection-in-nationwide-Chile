@@ -1,0 +1,191 @@
+---
+title: "Statistical Models"
+output: html_document
+date: "2024-08-29"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(readxl)
+library(lattice)
+library(dlnm)
+library(glmmTMB)
+library(splines)
+```
+
+```{r}
+full_dataset <- read.csv("../Data/full_dataset.csv")
+```
+
+```{r}
+colnames(full_dataset) <- c("Region","Date","Year","Week","Total Tests","Total RSV","Test Positivity Rate","PM2.5","PM10",
+                            "SO2","O3","NO2","Max.Temp","Min.Temp","Temp.Range","Avg.Temp","Prcp","RH","WS","AP")
+```
+
+```{r}
+## use data from 2015-2018
+full_dataset <- full_dataset[full_dataset$Year!=2019,] %>% as.data.frame()
+full_dataset$Date <- as.Date(full_dataset$Date)
+```
+
+```{r}
+# create region lists
+region_list <- unique(full_dataset$Region)
+```
+
+# Regression Models
+
+## Meteorological Factors
+
+```{r}
+# build model for each region
+for (i in 1:16){
+  region_data <- full_dataset[full_dataset$Region==region_list[i],]
+  region_data2 <- region_data
+  region_data2$Year <- as.numeric(region_data2$Year)
+  region_data2$Week <- as.numeric(region_data2$Week)
+  region_data2$Case <- region_data2$`Total RSV`
+  region_data2$Test <- region_data2$`Total Tests`
+  region_data2$Month <- as.numeric(substr(region_data2$Date,6,7))
+  
+  # set up baselines
+  rh <- floor(quantile(region_data2$RH,0.25))
+  tmax <- floor(quantile(region_data2$Max.Temp,0.25))
+  tmin <- floor(quantile(region_data2$Min.Temp,0.25))
+  tavg <- floor(quantile(region_data2$Avg.Temp,0.25))
+  ws <- floor(quantile(region_data2$WS,0.25))
+  
+  # create cross-basis functions
+  cb.rh <- crossbasis(region_data2$RH, lag=3, argvar=list(fun="lin"), arglag=list(fun="poly",degree=3))
+  cb.tmax <- crossbasis(region_data2$Max.Temp, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))
+  cb.tmin <- crossbasis(region_data2$Min.Temp, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))
+  cb.tavg <- crossbasis(region_data2$Avg.Temp, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))
+  cb.ws <- crossbasis(region_data2$WS, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))
+
+  # univariate regression models
+  Uni_rh_model <- gam(Case~cb.rh+s(Month,bs = "cc", k = 12)+ns(AP,df=3),
+                         offset=log(Test),family=quasipoisson(),data=region_data2,method='REML',select=TRUE)
+  Uni_tmax_model <- gam(Case~cb.tmax+s(Month,bs = "cc", k = 12)+ns(AP,df=3),offset=log(Test),family=quasipoisson(),
+                           data=region_data2,method='REML',select=TRUE)
+  Uni_tmin_model <- gam(Case~cb.tmin+s(Month,bs = "cc", k = 12)+ns(AP,df=3),offset=log(Test),family=quasipoisson(),
+                           data=region_data2,method='REML',select=TRUE)
+  Uni_tavg_model <- gam(Case~cb.tavg+s(Month,bs = "cc", k = 12)+ns(AP,df=3),offset=log(Test),family=quasipoisson(),
+                           data=region_data2,method='REML',select=TRUE)
+  Uni_ws_model <- gam(Case~cb.ws+s(Month,bs = "cc", k = 12)+ns(AP,df=3),offset=log(Test),family=quasipoisson(),
+                         data=region_data2,method='REML',select=TRUE)
+
+  relative.humidity.Uni <- crosspred(cb.rh,Uni_rh_model,cen=rh,cumul=TRUE,by=1)
+  TAVG.Uni <- crosspred(cb.tavg,Uni_tavg_model,cen=tavg,cumul=TRUE,by=1)
+  TMAX.Uni <- crosspred(cb.tmax,Uni_tmax_model,cen=tmax,cumul=TRUE,by=1)
+  TMIN.Uni <- crosspred(cb.tmin,Uni_tmin_model,cen=tmin,cumul=TRUE,by=1)
+  windspeed.Uni <- crosspred(cb.ws,Uni_ws_model,cen=ws,cumul=TRUE,by=1)
+}
+```
+
+## Air Pollutants
+
+```{r}
+for (i in 1:16){
+  region_data <- full_dataset[full_dataset$Region==region_list[i],]
+  region_data2 <- region_data
+  colnames(region_data2) <- colnames(region_data)
+  region_data2$Year <- as.factor(region_data2$Year)
+  region_data2$Week <- as.numeric(region_data2$Week)
+  region_data2$Case <- region_data2$`Total RSV`
+  region_data2$Test <- region_data2$`Total Tests`
+  region_data2$Month <- substr(region_data2$Date,6,7) %>% as.numeric()
+  
+  pm25 <- floor(quantile(region_data2$PM2.5,0.25))
+  pm10 <- floor(quantile(region_data2$PM10,0.25))
+  no2 <- floor(quantile(region_data2$NO2,0.25))
+  o3 <- floor(quantile(region_data2$O3,0.25))
+
+  cb.pm25 <- crossbasis(region_data2$PM2.5, lag=3, argvar=list(fun="lin"), arglag=list(fun="poly",degree=3))
+  cb.pm10 <- crossbasis(region_data2$PM10, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))
+  cb.no2 <- crossbasis(region_data2$NO2, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))
+  cb.o3 <- crossbasis(region_data2$O3, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))
+
+  Uni3_pm25_model <- gam(Case~cb.pm25+s(Month,bs = "cc", k = 12)+ns(RH,df=3)+ns(Avg.Temp,df=3)+ns(WS,df=3), 
+                           offset=log(Test),family=quasipoisson(),data=region_data2,method='REML',select=TRUE)
+  Uni3_pm10_model <- gam(Case~cb.pm10+s(Month,bs = "cc", k = 12)+ns(RH,df=3)+ns(Avg.Temp,df=3)+ns(WS,df=3),
+                           offset=log(Test),family=quasipoisson(),data=region_data2,method='REML', select=TRUE)
+  Uni3_no2_model <- gam(Case~cb.no2+s(Month,bs = "cc", k = 12)+ns(RH,df=3)+ns(Avg.Temp,df=3)+ns(WS,df=3),
+                          offset=log(Test),family=quasipoisson(),data=region_data2,method='REML',select=TRUE)
+  Uni3_o3_model <- gam(Case~cb.o3+s(Month,bs = "cc", k = 12)+ns(RH,df=3)+ns(Avg.Temp,df=3)+ns(WS,df=3),
+                         offset=log(Test),family=quasipoisson(),data=region_data2,method='REML',select=TRUE)  
+
+  pm25.Uni3 <- crosspred(cb.pm25,Uni3_pm25_model,cen=pm25,cumul=TRUE,by=1)
+  pm10.Uni3 <- crosspred(cb.pm10,Uni3_pm10_model,cen=pm10,cumul=TRUE,by=1)
+  no2.Uni3 <- crosspred(cb.no2,Uni3_no2_model,cen=no2,cumul=TRUE,by=1)
+  o3.Uni3 <- crosspred(cb.o3,Uni3_o3_model,cen=o3,cumul=TRUE,by=1)
+}
+```
+
+# Interactions
+
+```{r}
+calculate_RERI_metrics <- function(interaction_model,factor1,factor2,interaction){
+  result = summary(interaction_model)
+  RERI_interaction = (exp(coef(interaction_model)[interaction])-1)-
+    (exp(coef(interaction_model)[factor1])-1)-(exp(coef(interaction_model)[factor2])-1)
+  h1 = -exp(coef(interaction_model)[factor1])
+  h2 = -exp(coef(interaction_model)[factor2])
+  h3 = exp(coef(interaction_model)[interaction])
+  sigma13 = vcov(interaction_model)[factor1,interaction]
+  sigma23 = vcov(interaction_model)[factor2,interaction]
+  sigma12 = vcov(interaction_model)[factor1,factor2]
+  sigma1 = result$se[factor1]
+  sigma2 = result$se[factor2]
+  sigma3 = result$se[interaction]
+  var = (h1)^2*(sigma1)^2+(h2)^2*(sigma2)^2+(h3)^2*(sigma3)^2+2*h1*h3*sigma13+2*h1*h2*sigma12+2*h2*h3*sigma23
+  se = sqrt(var)
+  return(c(RERI_interaction,se,RERI_interaction-1.96*se,RERI_interaction+1.96*se))
+}
+```
+
+```{r}
+for (i in 1:16){
+  region_data <- full_dataset[full_dataset$Region==region_list[i],]
+  region_data$Year <- as.numeric(region_data$Year)
+  region_data$Week <- as.numeric(region_data$Week)
+  region_data$Case <- region_data$`Total RSV`
+  region_data$Test <- region_data$`Total Tests`
+  region_data$Month <- as.numeric(substr(region_data$Date,6,7))
+  
+  region_data <- region_data %>% mutate(`PM2.5_q60`=ifelse(PM2.5>quantile(region_data$PM2.5,0.6),1,0),
+                                        `PM2.5_q70`=ifelse(PM2.5>quantile(region_data$PM2.5,0.7),1,0),
+                                        `PM2.5_q80`=ifelse(PM2.5>quantile(region_data$PM2.5,0.8),1,0),
+                                        `PM2.5_q90`=ifelse(PM2.5>quantile(region_data$PM2.5,0.9),1,0),
+                                        `PM10_q60`=ifelse(PM10>quantile(region_data$PM10,0.6),1,0),
+                                        `PM10_q70`=ifelse(PM10>quantile(region_data$PM10,0.7),1,0),
+                                        `PM10_q80`=ifelse(PM10>quantile(region_data$PM10,0.8),1,0),
+                                        `PM10_q90`=ifelse(PM10>quantile(region_data$PM10,0.9),1,0))
+  # create 3-week of lag
+  n1 <- nrow(region_data)-3
+  region_data2 <- cbind(region_data[4:nrow(region_data),c(1:7,16:19,21:23)],region_data[1:n1,c(24:31)])
+  
+  # create interaction terms
+  interaction_pm25_pm10_q60_q60 <- region_data2$PM10_q60*region_data2$PM2.5_q60
+  interaction_pm25_pm10_q70_q70 <- region_data2$PM10_q70*region_data2$PM2.5_q70
+  interaction_pm25_pm10_q80_q80 <- region_data2$PM10_q80*region_data2$PM2.5_q80
+  interaction_pm25_pm10_q90_q90 <- region_data2$PM10_q90*region_data2$PM2.5_q90
+  
+  # build models
+  interaction_pm25_pm10_q60_q60_model <- gam(Case~PM10_q60+interaction_pm25_pm10_q60_q60+PM2.5_q60+s(Month,bs = "cc", k = 12)+
+                                       ns(WS,df=3)+ns(RH,df=3)+ns(Avg.Temp,df=3),offset=log(Test),family=quasipoisson(),
+                                      data=region_data2,method='REML',select=TRUE)
+  interaction_pm25_pm10_q70_q70_model <- gam(Case~PM10_q70+interaction_pm25_pm10_q70_q70+PM2.5_q70+s(Month,bs = "cc", k = 12)+
+                                       ns(WS,df=3)+ns(RH,df=3)+ns(Avg.Temp,df=3),offset=log(Test),family=quasipoisson(),
+                                      data=region_data2,method='REML',select=TRUE)
+  interaction_pm25_pm10_q80_q80_model <- gam(Case~PM10_q80+interaction_pm25_pm10_q80_q80+PM2.5_q80+s(Month,bs = "cc", k = 12)+
+                                       ns(WS,df=3)+ns(RH,df=3)+ns(Avg.Temp,df=3),offset=log(Test),family=quasipoisson(),
+                                      data=region_data2,method='REML',select=TRUE)
+  interaction_pm25_pm10_q90_q90_model <- gam(Case~PM10_q90+interaction_pm25_pm10_q90_q90+PM2.5_q90+s(Month,bs = "cc", k = 12)+
+                                       ns(WS,df=3)+ns(RH,df=3)+ns(Avg.Temp,df=3),offset=log(Test),family=quasipoisson(),
+                                      data=region_data2,method='REML',select=TRUE)
+  
+  calculate_RERI_metrics(interaction_pm25_pm10_q60_q60_model,"PM10_q60","PM2.5_q60","interaction_pm25_pm10_q60_q60")
+}
+```
+
