@@ -1,0 +1,170 @@
+---
+title: "Meta-Analysis Univariate Model"
+output: html_document
+date: "2024-10-31"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(metafor)
+library(meta)
+library(mgcv)
+library(grid)
+library(forestplot)
+library(tidyverse)
+library(readxl)
+```
+
+```{r}
+univariate_meteorological_result <- read.csv("../Results/uni_result_meteorological.csv")
+univariate_meteorological_result <- univariate_meteorological_result[,-1] %>% as.data.frame()
+colnames(univariate_meteorological_result) <- c("Est.Lag3","2.5-Lag3","97.5-Lag3","SE","Factor","Region")
+```
+
+```{r}
+full_data <- read.csv("../Data/full_dataset.csv")
+full_data <- full_data[,-1] %>% as.data.frame()
+full_data <- full_data[full_data$Year!=2019,]
+```
+
+### Meta-regression
+
+```{r}
+meta_regression_moderator <- function(main_factor,moderator,dataset){
+  moderator <- as.formula(paste0("~",moderator))
+  metareg <- rma(yi=log(Est.Lag3),sei = SE / Est.Lag3,mods=moderator,
+                 data=dataset[dataset$Factor==main_factor,],method="REML")
+  result <- summary(metareg)
+  result_df <- c(Coefficients = round(result$beta[2,1],4),SE = round(result$se[2],4),
+                 Z_value = round(result$zval[2],4),
+                 P_value = round(result$pval[2],4),CI = paste0("(",round(result$ci.lb[2],4),"-",round(result$ci.ub[2],4),")"))
+  return(result_df)
+}
+```
+
+```{r}
+annual_data <- full_data %>% group_by(Region) %>% summarize(annual_PM2.5=mean(PM2.5),annual_PM10=mean(PM10),
+                                                            annual_NO2=mean(NO2),annual_O3=mean(O3),
+                                                            annual_tavg=mean(Avg.Temp),annual_tmax=mean(Max.Temp),
+                                                            annual_tmin=mean(Min.Temp),annual_prcp=mean(Prcp),annual_rh=mean(RH),
+                                                            annual_ws=mean(WS))
+```
+
+```{r}
+univariate_meteorological_result <- merge(univariate_meteorological_result,annual_data,by="Region")
+```
+
+```{r}
+main_meteorological <- c("Relative Humidity","Wind Speed","Average Temperature","TMIN","TMAX")
+moderator <- c("annual_PM2.5","annual_PM10","annual_NO2","annual_O3","annual_tavg","annual_tmax",
+               "annual_tmin","annual_prcp","annual_rh","annual_ws")
+```
+
+```{r}
+metareg_result_meteorological <- matrix(NA,ncol=5,nrow=5*10)
+rowname_meteorological <- list(NULL)
+for (i in 1:5){
+  for (j in 1:10){
+    index <- (i-1)*10+j
+    metareg_result_meteorological[index,] <- meta_regression_moderator(main_factor=main_meteorological[i],
+                                                                       moderator=moderator[j],
+                                                                       dataset=univariate_meteorological_result)
+    rowname <- paste0(main_meteorological[i],":",moderator[j])
+    rowname_meteorological <- c(rowname_meteorological,rowname)
+  }
+}
+colnames(metareg_result_meteorological) <- c("estimate","se","zval","pval","95% CI")
+rownames(metareg_result_meteorological) <- unlist(rowname_meteorological)
+```
+
+### Nationwide Meta-Analysis
+
+```{r}
+meta_analysis_overall <- function(main_factor,dataset){
+   meta_analysis <- metagen(TE = log(Est.Lag3),
+                           seTE = SE / Est.Lag3,
+                           studlab = Region,
+                           data = dataset[dataset$Factor == main_factor, ],
+                           sm = "RR", 
+                           fixed = FALSE,
+                           random = TRUE,
+                           method.tau = "REML")
+  return(c(exp(meta_analysis$TE.random),exp(meta_analysis$lower.random),exp(meta_analysis$upper.random),meta_analysis$pval.Q))
+}
+```
+
+```{r}
+for (i in 1:5){
+   meta_analysis_overall(main_factor=main_meteorological[i],dataset=univariate_meteorological_result)
+}
+```
+
+### Subgroup Analysis
+
+#### Define Latitude Quantiles
+
+```{r}
+lonlat <- read.csv("../Data/LonLat.csv")
+lonlat <- lonlat %>% mutate(Natural_Area=ifelse(Latitude>-30,"North",
+                                        ifelse((Latitude>-35)&(-30>Latitude),"Central","South")))
+```
+
+#### Define GDP Quantiles 
+
+```{r}
+lonlat <- lonlat %>% mutate(Economic_Area=ifelse(GDP.per.capita<12364.25,"Q4",
+                                                 ifelse(GDP.per.capita<15904.5&GDP.per.capita>12364.25,"Q3",
+                                                        ifelse(GDP.per.capita<20944.25&GDP.per.capita>15904.5,"Q2","Q1"))))
+colnames(lonlat) <- c("Region","Latitude","Longitude","GDP","Natural Area","Economic Area")
+lonlat <- lonlat %>% mutate(Region=ifelse(Region=="BioBio","Biobio",
+                                          ifelse(Region=="O'Higgins","O.Higgins",Region)))
+```
+
+```{r}
+univariate_meteorological_result <- merge(univariate_meteorological_result,lonlat,by="Region")
+univariate_meteorological_result$`Economic Area` <- factor(univariate_meteorological_result$`Economic Area`,levels=c("Q1","Q2","Q3","Q4"))
+univariate_meteorological_result$`Natural Area` <- factor(univariate_meteorological_result$`Natural Area`,levels=c("North","Central","South"))
+```
+
+#### Subgroup Meta Functions
+
+```{r}
+subgroup_GDP <- function(main_factor,dataset){
+  meta_analysis <- metagen(TE = log(Est.Lag3),
+                           seTE = SE / Est.Lag3,
+                           studlab = Region,
+                           data = dataset[dataset$Factor == main_factor, ],
+                           sm = "RR", 
+                           fixed = FALSE,
+                           random = TRUE,
+                           method.tau = "REML")
+  meta_analysis_subgroup <- update(meta_analysis, 
+                                   subgroup = dataset[dataset$Factor==main_factor,"Economic Area"],tau.common = FALSE)
+  result <- t(rbind(round(exp(meta_analysis_subgroup$TE.random.w),4),round(exp(meta_analysis_subgroup$lower.random.w),4),
+                    round(exp(meta_analysis_subgroup$upper.random.w),4),round(meta_analysis_subgroup$I2.w,4)))
+  result <- cbind(result,c(NA,NA,NA,meta_analysis_subgroup$pval.Q.b.random))
+  return(result)
+}
+
+subgroup_climate <- function(main_factor,dataset){
+  meta_analysis <- metagen(TE = log(Est.Lag3),
+                           seTE = SE / Est.Lag3,
+                           studlab = Region,
+                           data = dataset[dataset$Factor == main_factor, ],
+                           sm = "RR", 
+                           fixed = FALSE,
+                           random = TRUE,
+                           method.tau = "REML")
+  meta_analysis_subgroup <- update(meta_analysis, 
+                                   subgroup = dataset[dataset$Factor==main_factor,"Natural Area"],tau.common = FALSE)
+  result <- t(rbind(round(exp(meta_analysis_subgroup$TE.random.w),4),round(exp(meta_analysis_subgroup$lower.random.w),4),
+                    round(exp(meta_analysis_subgroup$upper.random.w),4),round(meta_analysis_subgroup$I2.w,4)))
+  result <- cbind(result,c(NA,meta_analysis_subgroup$pval.Q.b.random))
+  return(result)
+}
+```
+
+```{r}
+subgroup_GDP(main_factor=main_meteorological[1],dataset=univariate_meteorological_result)
+subgroup_climate(main_factor=main_meteorological[1],dataset=univariate_meteorological_result)
+```
