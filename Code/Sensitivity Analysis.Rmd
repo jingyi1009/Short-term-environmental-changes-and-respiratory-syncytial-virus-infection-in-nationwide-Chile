@@ -1,0 +1,700 @@
+---
+title: "Sensitivity Analysis"
+output: html_document
+date: "2024-08-29"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(readxl)
+library(gstat)
+library(dlnm)
+library(glmmTMB)
+library(mgcv)
+library(ggdendro)
+library(splines)
+library(sf)
+library(sp)
+library(spdep)
+```
+
+```{r}
+full_dataset <- read.csv("../Data/full_dataset.csv")
+```
+
+```{r}
+colnames(full_dataset) <- c("Region","Date","Year","Week","Total Tests","Total RSV","Test Positivity Rate","PM2.5","PM10",
+                            "SO2","O3","NO2","Max.Temp","Min.Temp","Temp.Range","Avg.Temp","Prcp","RH","WS","AP")
+```
+
+```{r}
+## use data from 2015-2018
+full_dataset <- full_dataset[full_dataset$Year!=2019,] %>% as.data.frame()
+full_dataset$Date <- as.Date(full_dataset$Date)
+```
+
+```{r}
+# create region lists
+region_list <- unique(full_dataset$Region)
+```
+
+## Change degree of freedom to 4
+
+### Meteorological Factors
+
+```{r}
+for (i in 1:16){
+  region_data <- full_dataset[full_dataset$Region==region_list[i],]
+  region_data2 <- region_data
+  colnames(region_data2) <- colnames(region_data)
+  region_data2$Year <- as.numeric(region_data2$Year)
+  region_data2$Week <- as.numeric(region_data2$Week)
+  region_data2$Case <- region_data2$`Total RSV`
+  region_data2$Test <- region_data2$`Total Tests`
+  region_data2$Month <- as.numeric(substr(region_data2$Date,6,7))
+  
+  rh <- floor(quantile(region_data2$RH,0.1))
+  tmax <- floor(quantile(region_data2$Max.Temp,0.25))
+  tmin <- floor(quantile(region_data2$Min.Temp,0.25))
+  tavg <- floor(quantile(region_data2$Avg.Temp,0.25))
+  ws <- floor(quantile(region_data2$WS,0.25))
+  
+  cb.rh <- crossbasis(region_data2$RH, lag=3, argvar=list(fun="lin"), arglag=list(fun="poly",degree=4))
+  cb.tmax <- crossbasis(region_data2$Max.Temp, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=4))
+  cb.tmin <- crossbasis(region_data2$Min.Temp, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=4))
+  cb.tavg <- crossbasis(region_data2$Avg.Temp, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=4))
+  cb.ws <- crossbasis(region_data2$WS, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=4))
+
+  Uni_rh_model <- gam(Case~cb.rh+ns(AP,df=3)+s(Month,bs = "cc", k = 12),
+                         offset=log(Test),family=quasipoisson(),data=region_data2,method='REML',select=TRUE)
+  Uni_tmax_model <- gam(Case~cb.tmax+s(Month,bs = "cc", k = 12)+ns(AP,df=3),offset=log(Test),family=quasipoisson(),
+                           data=region_data2,method='REML',select=TRUE)
+  Uni_tmin_model <- gam(Case~cb.tmin+s(Month,bs = "cc", k = 12)+ns(AP,df=3),offset=log(Test),family=quasipoisson(),
+                           data=region_data2,method='REML',select=TRUE)
+  Uni_tavg_model <- gam(Case~cb.tavg+s(Month,bs = "cc", k = 12)+ns(AP,df=3),offset=log(Test),family=quasipoisson(),
+                           data=region_data2,method='REML',select=TRUE)
+  Uni_ws_model <- gam(Case~cb.ws+s(Month,bs = "cc", k = 12)+ns(AP,df=3),offset=log(Test),family=quasipoisson(),
+                         data=region_data2,method='REML',select=TRUE)
+  
+  relative.humidity.Uni <- crosspred(cb.rh,Uni_rh_model,cen=rh,cumul=TRUE,by=1)
+  TAVG.Uni <- crosspred(cb.tavg,Uni_tavg_model,cen=tavg,cumul=TRUE,by=1)
+  TMAX.Uni <- crosspred(cb.tmax,Uni_tmax_model,cen=tmax,cumul=TRUE,by=1)
+  TMIN.Uni <- crosspred(cb.tmin,Uni_tmin_model,cen=tmin,cumul=TRUE,by=1)
+  windspeed.Uni <- crosspred(cb.ws,Uni_ws_model,cen=ws,cumul=TRUE,by=1)
+}
+```
+
+### Air Pollutants
+
+```{r}
+for (i in 1:16){
+  region_data <- full_dataset[full_dataset$Region==region_list[i],]
+  region_data2 <- region_data
+  colnames(region_data2) <- colnames(region_data)
+  region_data2$Year <- as.numeric(region_data2$Year)
+  region_data2$Week <- as.numeric(region_data2$Week)
+  region_data2$Case <- region_data2$`Total RSV`
+  region_data2$Test <- region_data2$`Total Tests`
+  region_data2$Month <- as.numeric(substr(region_data2$Date,6,7))
+  
+  pm25 <- floor(quantile(region_data2$PM2.5,0.25))
+  pm10 <- floor(quantile(region_data2$PM10,0.25))
+  no2 <- floor(quantile(region_data2$NO2,0.25))
+  o3 <- floor(quantile(region_data2$O3,0.25))
+
+  cb.pm25 <- crossbasis(region_data2$PM2.5, lag=3, argvar=list(fun="lin"), arglag=list(fun="poly",degree=4))
+  cb.pm10 <- crossbasis(region_data2$PM10, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=4))  
+  cb.no2 <- crossbasis(region_data2$NO2, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=4))
+  cb.o3 <- crossbasis(region_data2$O3, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=4))
+  
+  Uni3_pm25_model <- gam(Case~cb.pm25+s(Month,bs = "cc", k = 12)+ns(WS,df=3)+ns(RH,df=3)+ns(Avg.Temp,df=3),offset=log(Test),family=quasipoisson(),
+                            data=region_data2,method='REML',select=TRUE)
+  Uni3_pm10_model <- gam(Case~cb.pm10+s(Month,bs = "cc", k = 12)+ns(WS,df=3)+ns(RH,df=3)+ns(Avg.Temp,df=3),offset=log(Test),family=quasipoisson(),
+                            data=region_data2,method='REML', select=TRUE)
+  Uni3_no2_model <- gam(Case~cb.no2+s(Month,bs = "cc", k = 12)+ns(WS,df=3)+ns(RH,df=3)+ns(Avg.Temp,df=3),offset=log(Test),family=quasipoisson(),
+                           data=region_data2,method='REML',select=TRUE)
+  Uni3_o3_model <- gam(Case~cb.o3+s(Month,bs = "cc", k = 12)+ns(WS,df=3)+ns(RH,df=3)+ns(Avg.Temp,df=3),offset=log(Test),family=quasipoisson(),
+                          data=region_data2,method='REML',select=TRUE)  
+  
+  pm25.Uni3 <- crosspred(cb.pm25,Uni3_pm25_model,cen=pm25,cumul=TRUE,by=1)
+  pm10.Uni3 <- crosspred(cb.pm10,Uni3_pm10_model,cen=pm10,cumul=TRUE,by=1)
+  no2.Uni3 <- crosspred(cb.no2,Uni3_no2_model,cen=no2,cumul=TRUE,by=1)
+  o3.Uni3 <- crosspred(cb.o3,Uni3_o3_model,cen=o3,cumul=TRUE,by=1)
+}
+```
+
+## Change lag period up to 5
+
+### Meteorological Factors
+
+```{r}
+for (i in 1:16){
+  region_data <- full_dataset[full_dataset$Region==region_list[i],]
+  region_data2 <- region_data
+  colnames(region_data2) <- colnames(region_data)
+  region_data2$Year <- as.numeric(region_data2$Year)
+  region_data2$Week <- as.numeric(region_data2$Week)
+  region_data2$Case <- region_data2$`Total RSV`
+  region_data2$Test <- region_data2$`Total Tests`
+  region_data2$Month <- as.numeric(substr(region_data2$Date,6,7))
+  
+  rh <- floor(quantile(region_data2$RH,0.1))
+  tmax <- floor(quantile(region_data2$Max.Temp,0.25))
+  tmin <- floor(quantile(region_data2$Min.Temp,0.25))
+  tavg <- floor(quantile(region_data2$Avg.Temp,0.25))
+  ws <- floor(quantile(region_data2$WS,0.25))
+  
+  cb.rh <- crossbasis(region_data2$RH, lag=5, argvar=list(fun="lin"), arglag=list(fun="poly",degree=3))
+  cb.tmax <- crossbasis(region_data2$Max.Temp, lag=5, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))
+  cb.tmin <- crossbasis(region_data2$Min.Temp, lag=5, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))
+  cb.tavg <- crossbasis(region_data2$Avg.Temp, lag=5, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))
+  cb.ws <- crossbasis(region_data2$WS, lag=5, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))
+  
+  Uni_rh_model <- gam(Case~cb.rh+ns(AP,df=3)+s(Month,bs = "cc", k = 12),
+                         offset=log(Test),family=quasipoisson(),data=region_data2,method='REML',select=TRUE)
+  Uni_tmax_model <- gam(Case~cb.tmax+s(Month,bs = "cc", k = 12)+ns(AP,df=3),offset=log(Test),family=quasipoisson(),
+                           data=region_data2,method='REML',select=TRUE)
+  Uni_tmin_model <- gam(Case~cb.tmin+s(Month,bs = "cc", k = 12)+ns(AP,df=3),offset=log(Test),family=quasipoisson(),
+                           data=region_data2,method='REML',select=TRUE)
+  Uni_tavg_model <- gam(Case~cb.tavg+s(Month,bs = "cc", k = 12)+ns(AP,df=3),offset=log(Test),family=quasipoisson(),
+                           data=region_data2,method='REML',select=TRUE)
+  Uni_ws_model <- gam(Case~cb.ws+s(Month,bs = "cc", k = 12)+ns(AP,df=3),offset=log(Test),family=quasipoisson(),
+                         data=region_data2,method='REML',select=TRUE)
+  
+  relative.humidity.Uni <- crosspred(cb.rh,Uni_rh_model,cen=rh,cumul=TRUE,by=1)
+  TAVG.Uni <- crosspred(cb.tavg,Uni_tavg_model,cen=tavg,cumul=TRUE,by=1)
+  TMAX.Uni <- crosspred(cb.tmax,Uni_tmax_model,cen=tmax,cumul=TRUE,by=1)
+  TMIN.Uni <- crosspred(cb.tmin,Uni_tmin_model,cen=tmin,cumul=TRUE,by=1)
+  windspeed.Uni <- crosspred(cb.ws,Uni_ws_model,cen=ws,cumul=TRUE,by=1)
+}
+```
+
+### Air Pollutants
+
+```{r}
+for (i in 1:16){
+  region_data <- full_dataset[full_dataset$Region==region_list[i],]
+  region_data2 <- region_data
+  colnames(region_data2) <- colnames(region_data)
+  region_data2$Year <- as.numeric(region_data2$Year)
+  region_data2$Week <- as.numeric(region_data2$Week)
+  region_data2$Case <- region_data2$`Total RSV`
+  region_data2$Test <- region_data2$`Total Tests`
+  region_data2$Month <- as.numeric(substr(region_data2$Date,6,7))
+  
+  pm25 <- floor(quantile(region_data2$PM2.5,0.25))
+  pm10 <- floor(quantile(region_data2$PM10,0.25))
+  no2 <- floor(quantile(region_data2$NO2,0.25))
+  o3 <- floor(quantile(region_data2$O3,0.25))
+
+  cb.pm25 <- crossbasis(region_data2$PM2.5, lag=5, argvar=list(fun="lin"), arglag=list(fun="poly",degree=3))
+  cb.pm10 <- crossbasis(region_data2$PM10, lag=5, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))  
+  cb.no2 <- crossbasis(region_data2$NO2, lag=5, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))
+  cb.o3 <- crossbasis(region_data2$O3, lag=5, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))
+  
+  Uni3_pm25_model <- gam(Case~cb.pm25+s(Month,bs = "cc", k = 12)+ns(WS,df=3)+ns(RH,df=3)+ns(Avg.Temp,df=3),offset=log(Test),family=quasipoisson(),
+                            data=region_data2,method='REML',select=TRUE)
+  Uni3_pm10_model <- gam(Case~cb.pm10+s(Month,bs = "cc", k = 12)+ns(WS,df=3)+ns(RH,df=3)+ns(Avg.Temp,df=3),offset=log(Test),family=quasipoisson(),
+                            data=region_data2,method='REML', select=TRUE)
+  Uni3_no2_model <- gam(Case~cb.no2+s(Month,bs = "cc", k = 12)+ns(WS,df=3)+ns(RH,df=3)+ns(Avg.Temp,df=3),offset=log(Test),family=quasipoisson(),
+                           data=region_data2,method='REML',select=TRUE)
+  Uni3_o3_model <- gam(Case~cb.o3+s(Month,bs = "cc", k = 12)+ns(WS,df=3)+ns(RH,df=3)+ns(Avg.Temp,df=3),offset=log(Test),family=quasipoisson(),
+                          data=region_data2,method='REML',select=TRUE)  
+  
+  pm25.Uni3 <- crosspred(cb.pm25,Uni3_pm25_model,cen=pm25,cumul=TRUE,by=1)
+  pm10.Uni3 <- crosspred(cb.pm10,Uni3_pm10_model,cen=pm10,cumul=TRUE,by=1)
+  no2.Uni3 <- crosspred(cb.no2,Uni3_no2_model,cen=no2,cumul=TRUE,by=1)
+  o3.Uni3 <- crosspred(cb.o3,Uni3_o3_model,cen=o3,cumul=TRUE,by=1)
+}
+```
+
+## Change to April-September
+
+### Meteorological Factors
+
+```{r}
+winter_dataset <- full_dataset
+winter_dataset$Month <- as.numeric(substr(winter_dataset$Date,6,7))
+winter_dataset <- winter_dataset[winter_dataset$Month<=9&winter_dataset$Month>=4,]
+```
+
+```{r}
+for (i in 1:16){
+  region_data <- winter_dataset[winter_dataset$Region==region_list[i],]
+  region_data2 <- region_data
+  colnames(region_data2) <- colnames(region_data)
+  region_data2$Year <- as.numeric(region_data2$Year)
+  region_data2$Week <- as.numeric(region_data2$Week)
+  region_data2$Case <- region_data2$`Total RSV`
+  region_data2$Test <- region_data2$`Total Tests`
+  region_data2$Month <- as.numeric(substr(region_data2$Date,6,7))
+  
+  rh <- floor(quantile(region_data2$RH,0.1))
+  tmax <- floor(quantile(region_data2$Max.Temp,0.25))
+  tmin <- floor(quantile(region_data2$Min.Temp,0.25))
+  tavg <- floor(quantile(region_data2$Avg.Temp,0.25))
+  ws <- floor(quantile(region_data2$WS,0.25))
+  
+  cb.rh <- crossbasis(region_data2$RH, lag=3, argvar=list(fun="lin"), arglag=list(fun="poly",degree=3))
+  cb.tmax <- crossbasis(region_data2$Max.Temp, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))
+  cb.tmin <- crossbasis(region_data2$Min.Temp, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))
+  cb.tavg <- crossbasis(region_data2$Avg.Temp, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))
+  cb.ws <- crossbasis(region_data2$WS, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))
+  
+  Uni_rh_model <- gam(Case~cb.rh+ns(AP,df=3)+s(Month,bs = "cc", k = 6),
+                         offset=log(Test),family=quasipoisson(),data=region_data2,method='REML',select=TRUE)
+  Uni_tmax_model <- gam(Case~cb.tmax+s(Month,bs = "cc", k = 6)+ns(AP,df=3),offset=log(Test),family=quasipoisson(),
+                           data=region_data2,method='REML',select=TRUE)
+  Uni_tmin_model <- gam(Case~cb.tmin+s(Month,bs = "cc", k = 6)+ns(AP,df=3),offset=log(Test),family=quasipoisson(),
+                           data=region_data2,method='REML',select=TRUE)
+  Uni_tavg_model <- gam(Case~cb.tavg+s(Month,bs = "cc", k = 6)+ns(AP,df=3),offset=log(Test),family=quasipoisson(),
+                           data=region_data2,method='REML',select=TRUE)
+  Uni_ws_model <- gam(Case~cb.ws+s(Month,bs = "cc", k = 6)+ns(AP,df=3),offset=log(Test),family=quasipoisson(),
+                         data=region_data2,method='REML',select=TRUE)
+  
+  relative.humidity.Uni <- crosspred(cb.rh,Uni_rh_model,cen=rh,cumul=TRUE,by=1)
+  TAVG.Uni <- crosspred(cb.tavg,Uni_tavg_model,cen=tavg,cumul=TRUE,by=1)
+  TMAX.Uni <- crosspred(cb.tmax,Uni_tmax_model,cen=tmax,cumul=TRUE,by=1)
+  TMIN.Uni <- crosspred(cb.tmin,Uni_tmin_model,cen=tmin,cumul=TRUE,by=1)
+  windspeed.Uni <- crosspred(cb.ws,Uni_ws_model,cen=ws,cumul=TRUE,by=1)
+}
+```
+
+### Air Pollutants
+
+```{r}
+for (i in 1:16){
+  region_data <- winter_dataset[winter_dataset$Region==region_list[i],]
+  region_data2 <- region_data
+  colnames(region_data2) <- colnames(region_data)
+  region_data2$Year <- as.numeric(region_data2$Year)
+  region_data2$Week <- as.numeric(region_data2$Week)
+  region_data2$Case <- region_data2$`Total RSV`
+  region_data2$Test <- region_data2$`Total Tests`
+  region_data2$Month <- as.numeric(substr(region_data2$Date,6,7))
+  
+  pm25 <- floor(quantile(region_data2$PM2.5,0.25))
+  pm10 <- floor(quantile(region_data2$PM10,0.25))
+  no2 <- floor(quantile(region_data2$NO2,0.25))
+  o3 <- floor(quantile(region_data2$O3,0.25))
+
+  cb.pm25 <- crossbasis(region_data2$PM2.5, lag=3, argvar=list(fun="lin"), arglag=list(fun="poly",degree=3))
+  cb.pm10 <- crossbasis(region_data2$PM10, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))  
+  cb.no2 <- crossbasis(region_data2$NO2, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))
+  cb.o3 <- crossbasis(region_data2$O3, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))
+  
+  Uni3_pm25_model <- gam(Case~cb.pm25+s(Month,bs = "cc", k = 6)+ns(WS,df=3)+ns(RH,df=3)+ns(Avg.Temp,df=3),offset=log(Test),family=quasipoisson(),
+                            data=region_data2,method='REML',select=TRUE)
+  Uni3_pm10_model <- gam(Case~cb.pm10+s(Month,bs = "cc", k = 6)+ns(WS,df=3)+ns(RH,df=3)+ns(Avg.Temp,df=3),offset=log(Test),family=quasipoisson(),
+                            data=region_data2,method='REML', select=TRUE)
+  Uni3_no2_model <- gam(Case~cb.no2+s(Month,bs = "cc", k = 6)+ns(WS,df=3)+ns(RH,df=3)+ns(Avg.Temp,df=3),offset=log(Test),family=quasipoisson(),
+                           data=region_data2,method='REML',select=TRUE)
+  Uni3_o3_model <- gam(Case~cb.o3+s(Month,bs = "cc", k = 6)+ns(WS,df=3)+ns(RH,df=3)+ns(Avg.Temp,df=3),offset=log(Test),family=quasipoisson(),
+                          data=region_data2,method='REML',select=TRUE)  
+  
+  pm25.Uni3 <- crosspred(cb.pm25,Uni3_pm25_model,cen=pm25,cumul=TRUE,by=1)
+  pm10.Uni3 <- crosspred(cb.pm10,Uni3_pm10_model,cen=pm10,cumul=TRUE,by=1)
+  no2.Uni3 <- crosspred(cb.no2,Uni3_no2_model,cen=no2,cumul=TRUE,by=1)
+  o3.Uni3 <- crosspred(cb.o3,Uni3_o3_model,cen=o3,cumul=TRUE,by=1)
+}
+```
+
+## Add Spatial Structure
+
+### Construct Spatial Structure for each region
+
+```{r}
+Chile <- st_read('../Data/cl_shp/cl.shp')
+Chile <- as(Chile, "Spatial")
+```
+
+```{r}
+nb_rook <- poly2nb(Chile,queen = FALSE,row.names = Chile$name) 
+listw <- nb2listw(nb_rook)
+coords <- coordinates(Chile)
+
+dlist <- nbdists(nb_rook, coords[,c(1,2)], longlat = T)
+dlist_p <- lapply(dlist, function(x) 1/(x*x))
+w_mat_d_p <- nb2listw(nb_rook, glist=dlist_p, zero.policy=TRUE)
+
+matrix_list <- listw2mat(w_mat_d_p)
+colnames(matrix_list) <- c("Arica","Tarapaca","Antofagasta","Atacama","Coquimbo","Metropolitana.de.Santiago",
+                           "Valparaiso","Maule","O.Higgins","Nuble","La.Araucania","Biobio","Los.Rios","Los.Lagos",
+                           "Aysen","Magallanes")
+rownames(matrix_list) <- colnames(matrix_list)
+```
+
+### Meteorological Factors
+
+```{r}
+for (i in 1:16){
+  region_data <- full_dataset[full_dataset$Region==region_list[i],]
+  neighbours_id <- which(colnames(matrix_list)==region_list[i])
+  neighbours_weight <- matrix_list[,neighbours_id]
+  neighbours_weight <- neighbours_weight[neighbours_weight>0]
+  neighbour_data <- matrix(NA,ncol=length(neighbours_weight),nrow=nrow(region_data))
+  for (j in 1:length(neighbours_weight)){
+    neighbour_data[,j] <- full_dataset[full_dataset$Region==names(neighbours_weight)[j],"Test Positivity Rate"]*neighbours_weight[j]}
+  colnames(neighbour_data) <- paste0("neighbour",seq(1:length(neighbours_weight)))
+  region_data <- cbind(region_data,neighbour_data)
+  region_data2 <- region_data
+  colnames(region_data2) <- colnames(region_data)
+  region_data2$Year <- as.numeric(region_data2$Year)
+  region_data2$Week <- as.numeric(region_data2$Week)
+  region_data2$Case <- region_data2$`Total RSV`
+  region_data2$Test <- region_data2$`Total Tests`
+  region_data2$Month <- as.numeric(substr(region_data2$Date,6,7))
+  
+  rh <- floor(quantile(region_data2$RH,0.25))
+  tmax <- floor(quantile(region_data2$Max.Temp,0.25))
+  tmin <- floor(quantile(region_data2$Min.Temp,0.25))
+  tavg <- floor(quantile(region_data2$Avg.Temp,0.25))
+  ws <- floor(quantile(region_data2$WS,0.25))
+  
+  cb.rh <- crossbasis(region_data2$RH, lag=3, argvar=list(fun="lin"), arglag=list(fun="poly",degree=3))
+  cb.tmax <- crossbasis(region_data2$Max.Temp, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))
+  cb.tmin <- crossbasis(region_data2$Min.Temp, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))
+  cb.tavg <- crossbasis(region_data2$Avg.Temp, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))
+  cb.ws <- crossbasis(region_data2$WS, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))
+  
+  if(length(neighbours_weight)>=1){
+    neighbour_list <- paste0("ns(neighbour",seq(1:length(neighbours_weight)),")")
+    neighbour_list <- paste(neighbour_list, collapse = " + ")
+    Uni_rh_model <- gam(Case~cb.rh+s(Month,bs = "cc", k = 12)+neighbour_list+ns(AP,df=3),offset=log(Test),family=quasipoisson(),
+                        data=region_data2,method='REML',select=TRUE)
+    Uni_tmax_model <- gam(Case~cb.tmax+s(Month,bs = "cc", k = 12)+neighbour_list+ns(AP,df=3),offset=log(Test),family=quasipoisson(),
+                          data=region_data2,method='REML',select=TRUE)
+    Uni_tmin_model <- gam(Case~cb.tmin+s(Month,bs = "cc", k = 12)+neighbour_list+ns(AP,df=3),offset=log(Test),family=quasipoisson(),
+                          data=region_data2,method='REML',select=TRUE)
+    Uni_tavg_model <- gam(Case~cb.tavg+s(Month,bs = "cc", k = 12)+neighbour_list+ns(AP,df=3),offset=log(Test),family=quasipoisson(),
+                          data=region_data2,method='REML',select=TRUE)
+    Uni_ws_model <- gam(Case~cb.ws+s(Month,bs = "cc", k = 12)+neighbour_list+ns(AP,df=3),offset=log(Test),family=quasipoisson(),
+                        data=region_data2,method='REML',select=TRUE)
+  }
+  else{
+    Uni_rh_model <- gam(Case~cb.rh+s(Month,bs = "cc", k = 12)+ns(AP,df=3),
+                         offset=log(Test),family=quasipoisson(),data=region_data2,method='REML',select=TRUE)
+    Uni_tmax_model <- gam(Case~cb.tmax+s(Month,bs = "cc", k = 12)+ns(AP,df=3),offset=log(Test),family=quasipoisson(),
+                           data=region_data2,method='REML',select=TRUE)
+    Uni_tmin_model <- gam(Case~cb.tmin+s(Month,bs = "cc", k = 12)+ns(AP,df=3),offset=log(Test),family=quasipoisson(),
+                           data=region_data2,method='REML',select=TRUE)
+    Uni_tavg_model <- gam(Case~cb.tavg+s(Month,bs = "cc", k = 12)+ns(AP,df=3),offset=log(Test),family=quasipoisson(),
+                           data=region_data2,method='REML',select=TRUE)
+    Uni_ws_model <- gam(Case~cb.ws+s(Month,bs = "cc", k = 12)+ns(AP,df=3),offset=log(Test),family=quasipoisson(),
+                         data=region_data2,method='REML',select=TRUE)
+  }
+  relative.humidity.Uni <- crosspred(cb.rh,Uni_rh_model,cen=rh,cumul=TRUE,by=1)
+  TAVG.Uni <- crosspred(cb.tavg,Uni_tavg_model,cen=tavg,cumul=TRUE,by=1)
+  TMAX.Uni <- crosspred(cb.tmax,Uni_tmax_model,cen=tmax,cumul=TRUE,by=1)
+  TMIN.Uni <- crosspred(cb.tmin,Uni_tmin_model,cen=tmin,cumul=TRUE,by=1)
+  windspeed.Uni <- crosspred(cb.ws,Uni_ws_model,cen=ws,cumul=TRUE,by=1)
+}
+```
+
+### Air Pollutants
+
+```{r}
+for (i in 1:16){
+  region_data <- full_dataset[full_dataset$Region==region_list[i],]
+  neighbours_id <- which(colnames(matrix_list)==region_list[i])
+  neighbours_weight <- matrix_list[,neighbours_id]
+  neighbours_weight <- neighbours_weight[neighbours_weight>0]
+  neighbour_data <- matrix(NA,ncol=length(neighbours_weight),nrow=nrow(region_data))
+  for (j in 1:length(neighbours_weight)){
+    neighbour_data[,j] <- full_dataset[full_dataset$Region==names(neighbours_weight)[j],"Test Positivity Rate"]*neighbours_weight[j]
+   }
+  colnames(neighbour_data) <- paste0("neighbour",seq(1:length(neighbours_weight)))
+  region_data <- cbind(region_data,neighbour_data)
+  region_data2 <- region_data
+  colnames(region_data2) <- colnames(region_data)
+  region_data2$Year <- as.numeric(region_data2$Year)
+  region_data2$Week <- as.numeric(region_data2$Week)
+  region_data2$Case <- region_data2$`Total RSV`
+  region_data2$Test <- region_data2$`Total Tests`
+  region_data2$Month <- as.numeric(substr(region_data2$Date,6,7))
+  
+  pm25 <- floor(quantile(region_data2$PM2.5,0.25))
+  pm10 <- floor(quantile(region_data2$PM10,0.25))
+  no2 <- floor(quantile(region_data2$NO2,0.25))
+  o3 <- floor(quantile(region_data2$O3,0.25))
+
+  cb.pm25 <- crossbasis(region_data2$PM2.5, lag=3, argvar=list(fun="lin"), arglag=list(fun="poly",degree=3))
+  cb.pm10 <- crossbasis(region_data2$PM10, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))  
+  cb.no2 <- crossbasis(region_data2$NO2, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))
+  cb.o3 <- crossbasis(region_data2$O3, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))
+  
+  if(length(neighbours_weight)>=1){
+    neighbour_list <- paste0("ns(neighbour",seq(1:length(neighbours_weight)),")")
+    neighbour_list <- paste(neighbour_list, collapse = " + ")
+    Uni3_pm25_model <- gam(Case~cb.pm25+s(Month,bs = "cc", k = 12)+neighbour_list+ns(WS,df=3)+ns(RH,df=3)+ns(Avg.Temp,df=3),offset=log(Test),family=quasipoisson(),
+                            data=region_data2,method='REML',select=TRUE)
+    Uni3_pm10_model <- gam(Case~cb.pm10+s(Month,bs = "cc", k = 12)+neighbour_list+ns(WS,df=3)+ns(RH,df=3)+ns(Avg.Temp,df=3),offset=log(Test),family=quasipoisson(),
+                            data=region_data2,method='REML', select=TRUE)
+    Uni3_no2_model <- gam(Case~cb.no2+s(Month,bs = "cc", k = 12)+neighbour_list+ns(WS,df=3)+ns(RH,df=3)+ns(Avg.Temp,df=3),offset=log(Test),family=quasipoisson(),
+                           data=region_data2,method='REML',select=TRUE)
+    Uni3_o3_model <- gam(Case~cb.o3+s(Month,bs = "cc", k = 12)+neighbour_list+ns(WS,df=3)+ns(RH,df=3)+ns(Avg.Temp,df=3),offset=log(Test),family=quasipoisson(),
+                          data=region_data2,method='REML',select=TRUE) 
+  }
+  else{
+    Uni3_pm25_model <- gam(Case~cb.pm25+s(Month,bs = "cc", k = 12)+ns(WS,df=3)+ns(RH,df=3)+ns(Avg.Temp,df=3),offset=log(Test),family=quasipoisson(),
+                            data=region_data2,method='REML',select=TRUE)
+    Uni3_pm10_model <- gam(Case~cb.pm10+s(Month,bs = "cc", k = 12)+ns(WS,df=3)+ns(RH,df=3)+ns(Avg.Temp,df=3),offset=log(Test),family=quasipoisson(),
+                            data=region_data2,method='REML', select=TRUE)
+    Uni3_no2_model <- gam(Case~cb.no2+s(Month,bs = "cc", k = 12)+ns(WS,df=3)+ns(RH,df=3)+ns(Avg.Temp,df=3),offset=log(Test),family=quasipoisson(),
+                           data=region_data2,method='REML',select=TRUE)
+    Uni3_o3_model <- gam(Case~cb.o3+s(Month,bs = "cc", k = 12)+ns(WS,df=3)+ns(RH,df=3)+ns(Avg.Temp,df=3),offset=log(Test),family=quasipoisson(),
+                          data=region_data2,method='REML',select=TRUE)  
+  }
+  pm25.Uni3 <- crosspred(cb.pm25,Uni3_pm25_model,cen=pm25,cumul=TRUE,by=1)
+  pm10.Uni3 <- crosspred(cb.pm10,Uni3_pm10_model,cen=pm10,cumul=TRUE,by=1)
+  no2.Uni3 <- crosspred(cb.no2,Uni3_no2_model,cen=no2,cumul=TRUE,by=1)
+  o3.Uni3 <- crosspred(cb.o3,Uni3_o3_model,cen=o3,cumul=TRUE,by=1)
+}
+```
+
+## Add spatial structure with 3-week of lag
+
+### Meteorological Factors
+
+```{r}
+for (i in 1:16){
+  region_data <- full_dataset[full_dataset$Region==region_list[i],]
+  neighbours_id <- which(colnames(matrix_list)==region_list[i])
+  neighbours_weight <- matrix_list[,neighbours_id]
+  neighbours_weight <- neighbours_weight[neighbours_weight>0]
+  neighbour_data <- matrix(NA,ncol=length(neighbours_weight),nrow=nrow(region_data))
+  for (j in 1:length(neighbours_weight)){
+    neighbour_data[,j] <- full_dataset[full_dataset$Region==names(neighbours_weight)[j],"Test Positivity Rate"]*neighbours_weight[j]}
+  colnames(neighbour_data) <- paste0("neighbour",seq(1:length(neighbours_weight)))
+  if(length(neighbours_weight)==0){
+    region_data <- region_data
+    region_data2 <- region_data
+  }else{
+    region_data <- cbind(region_data,neighbour_data)
+    c2 <- 20+length(neighbours_weight)
+    r2 <- nrow(region_data)-3
+    region_data2 <- cbind(region_data[4:nrow(region_data),c(1:20)],region_data[1:r2,c(21:c2)])
+  }
+  colnames(region_data2) <- colnames(region_data)
+  region_data2$Year <- as.numeric(region_data2$Year)
+  region_data2$Week <- as.numeric(region_data2$Week)
+  region_data2$Case <- region_data2$`Total RSV`
+  region_data2$Test <- region_data2$`Total Tests`
+  region_data2$Month <- as.numeric(substr(region_data2$Date,6,7)) 
+  
+  rh <- floor(quantile(region_data2$RH,0.25))
+  trange <- floor(quantile(region_data2$Temp.Range,0.25))
+  tmax <- floor(quantile(region_data2$Max.Temp,0.25))
+  tmin <- floor(quantile(region_data2$Min.Temp,0.25))
+  tavg <- floor(quantile(region_data2$Avg.Temp,0.25))
+  ws <- floor(quantile(region_data2$WS,0.25))
+  p <- floor(quantile(region_data2$Prcp,0.25))
+  
+  cb.rh <- crossbasis(region_data2$RH, lag=3, argvar=list(fun="lin"), arglag=list(fun="poly",degree=3))
+  cb.p <- crossbasis(region_data2$Prcp, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))  
+  cb.trange <- crossbasis(region_data2$Temp.Range, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))
+  cb.tmax <- crossbasis(region_data2$Max.Temp, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))
+  cb.tmin <- crossbasis(region_data2$Min.Temp, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))
+  cb.tavg <- crossbasis(region_data2$Avg.Temp, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))
+  cb.ws <- crossbasis(region_data2$WS, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))
+  
+  if(length(neighbours_weight)>=1){
+    neighbour_list <- paste0("ns(neighbour",seq(1:length(neighbours_weight)),")")
+    neighbour_list <- paste(neighbour_list, collapse = " + ")
+    Uni_rh_model <- gam(Case~cb.rh+s(Month,bs = "cc", k = 12)+neighbour_list+ns(AP,df=3),offset=log(Test),family=quasipoisson(),
+                        data=region_data2,method='REML',select=TRUE)
+    Uni_tmax_model <- gam(Case~cb.tmax+s(Month,bs = "cc", k = 12)+neighbour_list+ns(AP,df=3),offset=log(Test),family=quasipoisson(),
+                          data=region_data2,method='REML',select=TRUE)
+    Uni_tmin_model <- gam(Case~cb.tmin+s(Month,bs = "cc", k = 12)+neighbour_list+ns(AP,df=3),offset=log(Test),family=quasipoisson(),
+                          data=region_data2,method='REML',select=TRUE)
+    Uni_tavg_model <- gam(Case~cb.tavg+s(Month,bs = "cc", k = 12)+neighbour_list+ns(AP,df=3),offset=log(Test),family=quasipoisson(),
+                          data=region_data2,method='REML',select=TRUE)
+    Uni_ws_model <- gam(Case~cb.ws+s(Month,bs = "cc", k = 12)+neighbour_list+ns(AP,df=3),offset=log(Test),family=quasipoisson(),
+                        data=region_data2,method='REML',select=TRUE)
+  }
+  else{
+    Uni_rh_model <- gam(Case~cb.rh+s(Month,bs = "cc", k = 12)+ns(AP,df=3),
+                         offset=log(Test),family=quasipoisson(),data=region_data2,method='REML',select=TRUE)
+    Uni_tmax_model <- gam(Case~cb.tmax+s(Month,bs = "cc", k = 12)+ns(AP,df=3),offset=log(Test),family=quasipoisson(),
+                           data=region_data2,method='REML',select=TRUE)
+    Uni_tmin_model <- gam(Case~cb.tmin+s(Month,bs = "cc", k = 12)+ns(AP,df=3),offset=log(Test),family=quasipoisson(),
+                           data=region_data2,method='REML',select=TRUE)
+    Uni_tavg_model <- gam(Case~cb.tavg+s(Month,bs = "cc", k = 12)+ns(AP,df=3),offset=log(Test),family=quasipoisson(),
+                           data=region_data2,method='REML',select=TRUE)
+    Uni_ws_model <- gam(Case~cb.ws+s(Month,bs = "cc", k = 12)+ns(AP,df=3),offset=log(Test),family=quasipoisson(),
+                         data=region_data2,method='REML',select=TRUE)
+  }
+  
+  relative.humidity.Uni <- crosspred(cb.rh,Uni_rh_model,cen=rh,cumul=TRUE,by=1)
+  precipitation.Uni <- crosspred(cb.p,Uni_p_model,cen=p,cumul=TRUE,by=1)
+  TAVG.Uni <- crosspred(cb.tavg,Uni_tavg_model,cen=tavg,cumul=TRUE,by=1)
+  TMAX.Uni <- crosspred(cb.tmax,Uni_tmax_model,cen=tmax,cumul=TRUE,by=1)
+  TMIN.Uni <- crosspred(cb.tmin,Uni_tmin_model,cen=tmin,cumul=TRUE,by=1)
+  Trange.Uni <- crosspred(cb.trange,Uni_trange_model,cen=trange,cumul=TRUE,by=1)
+  windspeed.Uni <- crosspred(cb.ws,Uni_ws_model,cen=ws,cumul=TRUE,by=1)
+}
+```
+
+### Air Pollutants
+
+```{r}
+for (i in 1:16){
+  region_data <- full_dataset[full_dataset$Region==region_list[i],]
+  neighbours_id <- which(colnames(matrix_list)==region_list[i])
+  neighbours_weight <- matrix_list[,neighbours_id]
+  neighbours_weight <- neighbours_weight[neighbours_weight>0]
+  neighbour_data <- matrix(NA,ncol=length(neighbours_weight),nrow=nrow(region_data))
+  for (j in 1:length(neighbours_weight)){
+    neighbour_data[,j] <- full_dataset[full_dataset$Region==names(neighbours_weight)[j],"Test Positivity Rate"]*neighbours_weight[j]}
+  colnames(neighbour_data) <- paste0("neighbour",seq(1:length(neighbours_weight)))
+  if(length(neighbours_weight)==0){
+    region_data2 <- region_data
+  }else{
+    region_data <- cbind(region_data,neighbour_data)
+    c2 <- 20+length(neighbours_weight)
+    r2 <- nrow(region_data)-3
+    region_data2 <- cbind(region_data[4:nrow(region_data),c(1:20)],region_data[1:r2,c(21:c2)])
+  }
+  colnames(region_data2) <- colnames(region_data)
+  region_data2$Year <- as.numeric(region_data2$Year)
+  region_data2$Week <- as.numeric(region_data2$Week)
+  region_data2$Case <- region_data2$`Total RSV`
+  region_data2$Test <- region_data2$`Total Tests`
+  region_data2$Month <- as.numeric(substr(region_data2$Date,6,7))
+
+  pm25 <- floor(quantile(region_data2$PM2.5,0.25))
+  pm10 <- floor(quantile(region_data2$PM10,0.25))
+  no2 <- floor(quantile(region_data2$NO2,0.25))
+  o3 <- floor(quantile(region_data2$O3,0.25))
+
+  cb.pm25 <- crossbasis(region_data2$PM2.5, lag=3, argvar=list(fun="lin"), arglag=list(fun="poly",degree=3))
+  cb.pm10 <- crossbasis(region_data2$PM10, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))  
+  cb.no2 <- crossbasis(region_data2$NO2, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))
+  cb.o3 <- crossbasis(region_data2$O3, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))
+  
+  if(length(neighbours_weight)>=1){
+    neighbour_list <- paste0("ns(neighbour",seq(1:length(neighbours_weight)),")")
+    neighbour_list <- paste(neighbour_list, collapse = " + ")
+    Uni3_pm25_model <- gam(Case~cb.pm25+s(Month,bs = "cc", k = 12)+neighbour_list+ns(WS,df=3)+ns(RH,df=3)+ns(Avg.Temp,df=3),offset=log(Test),family=quasipoisson(),
+                            data=region_data2,method='REML',select=TRUE)
+    Uni3_pm10_model <- gam(Case~cb.pm10+s(Month,bs = "cc", k = 12)+neighbour_list+ns(WS,df=3)+ns(RH,df=3)+ns(Avg.Temp,df=3),offset=log(Test),family=quasipoisson(),
+                            data=region_data2,method='REML', select=TRUE)
+    Uni3_no2_model <- gam(Case~cb.no2+s(Month,bs = "cc", k = 12)+neighbour_list+ns(WS,df=3)+ns(RH,df=3)+ns(Avg.Temp,df=3),offset=log(Test),family=quasipoisson(),
+                           data=region_data2,method='REML',select=TRUE)
+    Uni3_o3_model <- gam(Case~cb.o3+s(Month,bs = "cc", k = 12)+neighbour_list+ns(WS,df=3)+ns(RH,df=3)+ns(Avg.Temp,df=3),offset=log(Test),family=quasipoisson(),
+                          data=region_data2,method='REML',select=TRUE) 
+  }
+  else{
+    Uni3_pm25_model <- gam(Case~cb.pm25+s(Month,bs = "cc", k = 12)+ns(WS,df=3)+ns(RH,df=3)+ns(Avg.Temp,df=3),offset=log(Test),family=quasipoisson(),
+                            data=region_data2,method='REML',select=TRUE)
+    Uni3_pm10_model <- gam(Case~cb.pm10+s(Month,bs = "cc", k = 12)+ns(WS,df=3)+ns(RH,df=3)+ns(Avg.Temp,df=3),offset=log(Test),family=quasipoisson(),
+                            data=region_data2,method='REML', select=TRUE)
+    Uni3_no2_model <- gam(Case~cb.no2+s(Month,bs = "cc", k = 12)+ns(WS,df=3)+ns(RH,df=3)+ns(Avg.Temp,df=3),offset=log(Test),family=quasipoisson(),
+                           data=region_data2,method='REML',select=TRUE)
+    Uni3_o3_model <- gam(Case~cb.o3+s(Month,bs = "cc", k = 12)+ns(WS,df=3)+ns(RH,df=3)+ns(Avg.Temp,df=3),offset=log(Test),family=quasipoisson(),
+                          data=region_data2,method='REML',select=TRUE)  
+  }
+  pm25.Uni3 <- crosspred(cb.pm25,Uni3_pm25_model,cen=pm25,cumul=TRUE,by=1)
+  pm10.Uni3 <- crosspred(cb.pm10,Uni3_pm10_model,cen=pm10,cumul=TRUE,by=1)
+  no2.Uni3 <- crosspred(cb.no2,Uni3_no2_model,cen=no2,cumul=TRUE,by=1)
+  o3.Uni3 <- crosspred(cb.o3,Uni3_o3_model,cen=o3,cumul=TRUE,by=1)
+}
+```
+
+## Data from 2015-2019, exclude Aysen
+
+```{r}
+full_dataset2 <- read.csv("../Data/full_dataset.csv")
+```
+
+```{r}
+colnames(full_dataset2) <- c("Region","Date","Year","Week","Total Tests","Total RSV","Test Positivity Rate","PM2.5","PM10",
+                            "SO2","O3","NO2","Max.Temp","Min.Temp","Temp.Range","Avg.Temp","Prcp","RH","WS","AP")
+full_dataset2$Date <- as.Date(full_dataset2$Date)
+region_list_2 <- unique(full_dataset2$Region)
+region_list_2 <- region_list_2[region_list_2 != "Aysen"]
+```
+
+### Meteorological Factors
+
+```{r}
+for (i in 1:15){
+  region_data <- full_dataset2[full_dataset2$Region==region_list[i],]
+  region_data2 <- region_data
+  colnames(region_data2) <- colnames(region_data)
+  region_data2$Year <- as.numeric(region_data2$Year)
+  region_data2$Week <- as.numeric(region_data2$Week)
+  region_data2$Case <- region_data2$`Total RSV`
+  region_data2$Test <- region_data2$`Total Tests`
+  region_data2$Month <- as.numeric(substr(region_data2$Date,6,7))
+
+  rh <- floor(quantile(region_data2$RH,0.1))
+  tmax <- floor(quantile(region_data2$Max.Temp,0.25))
+  tmin <- floor(quantile(region_data2$Min.Temp,0.25))
+  tavg <- floor(quantile(region_data2$Avg.Temp,0.25))
+  ws <- floor(quantile(region_data2$WS,0.25))
+  
+  cb.rh <- crossbasis(region_data2$RH, lag=3, argvar=list(fun="lin"), arglag=list(fun="poly",degree=3))
+  cb.tmax <- crossbasis(region_data2$Max.Temp, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))
+  cb.tmin <- crossbasis(region_data2$Min.Temp, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))
+  cb.tavg <- crossbasis(region_data2$Avg.Temp, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))
+  cb.ws <- crossbasis(region_data2$WS, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))
+  
+  Uni_rh_model <- gam(Case~cb.rh+ns(AP,df=3)+s(Month,bs = "cc", k = 12),
+                         offset=log(Test),family=quasipoisson(),data=region_data2,method='REML',select=TRUE)
+  Uni_tmax_model <- gam(Case~cb.tmax+s(Month,bs = "cc", k = 12)+ns(AP,df=3),offset=log(Test),family=quasipoisson(),
+                           data=region_data2,method='REML',select=TRUE)
+  Uni_tmin_model <- gam(Case~cb.tmin+s(Month,bs = "cc", k = 12)+ns(AP,df=3),offset=log(Test),family=quasipoisson(),
+                           data=region_data2,method='REML',select=TRUE)
+  Uni_tavg_model <- gam(Case~cb.tavg+s(Month,bs = "cc", k = 12)+ns(AP,df=3),offset=log(Test),family=quasipoisson(),
+                           data=region_data2,method='REML',select=TRUE)
+  Uni_ws_model <- gam(Case~cb.ws+s(Month,bs = "cc", k = 12)+ns(AP,df=3),offset=log(Test),family=quasipoisson(),
+                         data=region_data2,method='REML',select=TRUE)
+  
+  relative.humidity.Uni <- crosspred(cb.rh,Uni_rh_model,cen=rh,cumul=TRUE,by=1)
+  TAVG.Uni <- crosspred(cb.tavg,Uni_tavg_model,cen=tavg,cumul=TRUE,by=1)
+  TMAX.Uni <- crosspred(cb.tmax,Uni_tmax_model,cen=tmax,cumul=TRUE,by=1)
+  TMIN.Uni <- crosspred(cb.tmin,Uni_tmin_model,cen=tmin,cumul=TRUE,by=1)
+  windspeed.Uni <- crosspred(cb.ws,Uni_ws_model,cen=ws,cumul=TRUE,by=1)
+}
+```
+
+### Air Pollutants
+
+```{r}
+for (i in 1:15){
+  region_data <- full_dataset2[full_dataset2$Region==region_list[i],]
+  region_data2 <- region_data
+  colnames(region_data2) <- colnames(region_data)
+  region_data2$Year <- as.numeric(region_data2$Year)
+  region_data2$Week <- as.numeric(region_data2$Week)
+  region_data2$Case <- region_data2$`Total RSV`
+  region_data2$Test <- region_data2$`Total Tests`
+  region_data2$Month <- as.numeric(substr(region_data2$Date,6,7))
+  
+  pm25 <- floor(quantile(region_data2$PM2.5,0.25))
+  pm10 <- floor(quantile(region_data2$PM10,0.25))
+  no2 <- floor(quantile(region_data2$NO2,0.25))
+  o3 <- floor(quantile(region_data2$O3,0.25))
+
+  cb.pm25 <- crossbasis(region_data2$PM2.5, lag=3, argvar=list(fun="lin"), arglag=list(fun="poly",degree=3))
+  cb.pm10 <- crossbasis(region_data2$PM10, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))  
+  cb.no2 <- crossbasis(region_data2$NO2, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))
+  cb.o3 <- crossbasis(region_data2$O3, lag=3, argvar=list(fun="lin"),arglag=list(fun="poly",degree=3))
+  
+  Uni3_pm25_model <- gam(Case~cb.pm25+s(Month,bs = "cc", k = 12)+ns(WS,df=3)+ns(RH,df=3)+ns(Avg.Temp,df=3),offset=log(Test),family=quasipoisson(),
+                            data=region_data2,method='REML',select=TRUE)
+  Uni3_pm10_model <- gam(Case~cb.pm10+s(Month,bs = "cc", k = 12)+ns(WS,df=3)+ns(RH,df=3)+ns(Avg.Temp,df=3),offset=log(Test),family=quasipoisson(),
+                            data=region_data2,method='REML', select=TRUE)
+  Uni3_no2_model <- gam(Case~cb.no2+s(Month,bs = "cc", k = 12)+ns(WS,df=3)+ns(RH,df=3)+ns(Avg.Temp,df=3),offset=log(Test),family=quasipoisson(),
+                           data=region_data2,method='REML',select=TRUE)
+  Uni3_o3_model <- gam(Case~cb.o3+s(Month,bs = "cc", k = 12)+ns(WS,df=3)+ns(RH,df=3)+ns(Avg.Temp,df=3),offset=log(Test),family=quasipoisson(),
+                          data=region_data2,method='REML',select=TRUE)  
+  
+  pm25.Uni3 <- crosspred(cb.pm25,Uni3_pm25_model,cen=pm25,cumul=TRUE,by=1)
+  pm10.Uni3 <- crosspred(cb.pm10,Uni3_pm10_model,cen=pm10,cumul=TRUE,by=1)
+  no2.Uni3 <- crosspred(cb.no2,Uni3_no2_model,cen=no2,cumul=TRUE,by=1)
+  o3.Uni3 <- crosspred(cb.o3,Uni3_o3_model,cen=o3,cumul=TRUE,by=1)
+}
+```
