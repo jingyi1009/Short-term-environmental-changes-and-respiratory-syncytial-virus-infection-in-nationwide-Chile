@@ -13,17 +13,17 @@ The `data` folder includes:
 
 ## Research Content
 We provide demonstrations of our research on the **Analysis** branch.
-### Main Analyses
-1. **Descriptive Analysis**
+### 1. Main Analyses
+1.1 **Descriptive Analysis**
 Descriptive analysis was performed using the demo data, focusing on spatial and temporal trends of RSV infections and quantifying the seasonality of RSV epidemics.
 
-2. **Statistical Models**
+1.2 **Statistical Models**
 Regression analyses examining associations between RSV infections and environmental factors.
-  
-3. ### Subgroup Analyses
+
+1.3 **Subgroup Analyses**
 Includes detailed results from subgroup analyses conducted across different geographical groups.
 
-4. ### Sensitivity Analyses
+### 2. Sensitivity Analyses
 Contains information on the sensitivity analyses we performed to validate the robustness of our findings.
 
 
