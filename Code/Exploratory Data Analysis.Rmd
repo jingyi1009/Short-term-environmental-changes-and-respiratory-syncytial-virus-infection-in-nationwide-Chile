@@ -1,0 +1,187 @@
+---
+title: "Exploratory Data Analysis"
+output: html_document
+date: "2024-05-15"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readxl)
+library(ggpubr)
+library(tidyverse)
+library(ggplot2)
+library(lubridate)
+library(sp)
+library(spdep)
+library(patchwork)
+library(mem)
+library(boot)
+library(stats)
+library(mgcv)
+library(tidyr)
+library(dplyr)
+library(sf)
+library(spData)
+library(gridExtra)
+library(car)
+library(ez)
+```
+
+```{r}
+Chile_sf <- st_read("../Data/cl_shp/cl.shp")
+Chile <- as(Chile_sf, "Spatial")
+```
+
+```{r}
+regional_data <- read.csv("../Data/Summarized_region_data.csv") 
+regional_data <- regional_data[,-1]
+```
+
+```{r}
+full_dataset <- read.csv("../Data/full_dataset.csv") 
+full_dataset <- full_dataset %>% as.data.frame()
+region_list <- unique(full_dataset$Region)
+```
+
+## Moran's I Statistic
+
+```{r}
+Moran.I.func <- function(data,variable){
+  neighbours <- poly2nb(data, queen = FALSE)
+  listw <- nb2listw(neighbours)
+  coords <- coordinates(Chile)
+  dlist <- nbdists(neighbours, coords[,c(1,2)], longlat = T)
+  dlist_p2 <- lapply(dlist, function(x) 1/(x*x))
+  w_mat_d_p2 <- nb2listw(neighbours, glist=dlist_p2, zero.policy=TRUE)
+  globalMoran <- moran.test(data.frame(data)[,variable], w_mat_d_p2)
+  statistics <- c(globalMoran$statistic,globalMoran$estimate,globalMoran$p.value)
+  return(statistics)
+}
+```
+
+```{r}
+Chile_sp <- sp::merge(Chile, regional_data[regional_data$year==2015,], by="name",duplicateGeoms = TRUE) %>% st_as_sf()
+```
+
+```{r}
+Moran.I.func(Chile_sp,"positive_rate")
+```
+
+## Define RSV Seasonality
+
+### Weekly positivity rate: 10% threshold
+
+```{r}
+chile_data_positive_rate <- read.csv("./chile_data_positive_rate.csv")[,-1]
+```
+
+```{r}
+ref_epi_time <- matrix(NA,ncol=3,nrow=4) %>% as.data.frame()
+rownames(ref_epi_time) <- c(2015:2018)
+for (i in 1:4){
+  self_0.10_sequence <- which(chile_data_positive_rate[,i]>0.10)
+  ref_epi_time[i,1:3] <- c(min(self_0.10_sequence),max(self_0.10_sequence),max(self_0.10_sequence)-min(self_0.10_sequence))
+  
+}
+colnames(ref_epi_time) <- c("Proportion Positivity (10%) - Start","Proportion Positivity (10%) - End","Proportion Positivity (10%) - Weeks")
+```
+
+## Correlation 
+
+### Nationwide Correlations (3-week of Lag)
+
+```{r}
+full_data_lag3 <- matrix(NA,ncol=26,nrow=1)
+for (i in 1:16){
+  region_data <- full_dataset[full_dataset$Region==region_list[i],]
+  region_data2 <- matrix(NA,ncol=20,nrow=205) %>% as.data.frame()
+  region_data2[,1:7] <- region_data[4:208,1:7]
+  region_data2[,8:20] <- region_data[1:205,8:20]
+ full_data_lag3 <- rbind(full_data_lag3,region_data2)
+}
+full_data_lag3 <- full_data_lag3[-1,] %>% as.data.frame()
+colnames(full_data_lag3) <- colnames(full_dataset) 
+```
+
+```{r}
+cor_data <- full_data_lag3[,c(7:20)]
+colnames(cor_data) <- c("Test Positivity Rate","PM2.5","PM10","SO2","O3","NO2","Maximum Temperature",
+                        "Minimum Temperature","Average Temperature","Precipitation","Relative Humidity","Wind Speed","Air Pressure")
+```
+
+```{r}
+# corr with test positive
+corr_test_positive <- round(cor(cor_data,method="spearman"), 1)
+p.mat <- cor_pmat(corr_test_positive)
+ggcorrplot(corr_test_positive,
+           hc.order=TRUE,
+           type='lower',
+           lab=TRUE,
+           outline.color='white',
+           p.mat = p.mat,
+           #colors=diverge_hcl(3, palette='Blue Red2'),
+           colors= c("#57A0D3","white","#E4717A"),
+           ggtheme=theme_bw)+
+  scale_fill_gradient2(name = "Rho",
+                       low = "#57A0D3", high = "#E4717A", mid = "white",
+                       midpoint = 0, limit = c(-1, 1), space = "Lab")+
+  theme(legend.position = "right",
+        axis.text = element_text(size = 18,family="sans",face="bold"),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        legend.text = element_text(size = 14,family="sans"),
+        legend.title = element_text(size = 16,family="sans",face="bold"))
+```
+
+### Distribution during epidemics and non-epidemics
+
+```{r}
+epi_time <- c(23,39,19,36,18,36,20,38)
+```
+
+```{r}
+epi_nonepi_difference <- function(data,variable,epi_time){
+  data$week <- rep(c(1:52),4)
+  data$year <- c(rep(2015,52),rep(2016,52),rep(2017,52),rep(2018,52))
+  epi <- rbind(data[data$year==2015&
+                      data$week>=epi_time[1]-3&
+                      data$week<=epi_time[2]-3,],
+                  data[data$year==2016&
+                         data$week>=epi_time[3]-3&
+                         data$week<=epi_time[4]-3,],
+                  data[data$year==2017&
+                         data$week>=epi_time[5]-3&
+                         data$week<=epi_time[6]-3,],
+                  data[data$year==2018&
+                         data$week>=epi_time[7]-3&
+                         data$week<=epi_time[8]-3,])
+  prepost <- data[!data$Date%in%epi$Date,]
+  prepost_epi <- unlist(prepost[,variable])
+  epi <- unlist(epi[,variable])
+  result <- list()
+  result[['prepost-epi']] <- paste0(round(mean(prepost_epi),1),",(",round(quantile(prepost_epi,0.025),1),",",round(quantile(prepost_epi,0.975),1),")")
+  result[['epi']] <- paste0(round(mean(epi),1),",(",round(quantile(epi,0.025),1),",",round(quantile(epi,0.975),1),")")
+  stats_test <- wilcox.test(prepost_epi,epi)
+  result[['p.value']] <- stats_test$p.value
+  result[['prepost-epi-data']] <- prepost_epi
+  result[['epi-data']] <- epi
+  return(result)
+}
+```
+
+```{r}
+pm25_epi <- epi_nonepi_difference(full_dataset,"PM2.5",epi_time)
+pm10_epi <- epi_nonepi_difference(full_dataset,"PM10",epi_time)
+so2_epi <- epi_nonepi_difference(full_dataset,"SO2",epi_time)
+o3_epi <- epi_nonepi_difference(full_dataset,"O3",epi_time)
+no2_epi <- epi_nonepi_difference(full_dataset,"NO2",epi_time)
+MeanTemp_epi <- epi_nonepi_difference(full_dataset,"Avg.Temp",epi_time)
+MinTemp_epi <- epi_nonepi_difference(full_dataset,"Min.Temp",epi_time)
+MaxTemp_epi <- epi_nonepi_difference(full_dataset,"Max.Temp",epi_time)
+Prcp_epi <- epi_nonepi_difference(full_dataset,"Prcp",epi_time)
+RH_epi <- epi_nonepi_difference(full_dataset,"RH",epi_time)
+WS_epi <- epi_nonepi_difference(full_dataset,"WS",epi_time)
+AP_epi <- epi_nonepi_difference(full_dataset,"AP",epi_time)
+```
+
+
