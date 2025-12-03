@@ -20,8 +20,8 @@ Descriptive analysis was performed using the demo data, focusing on spatial and 
 1.2 **Statistical Models**
 Regression analyses examining associations between RSV infections and environmental factors.
 
-1.3 **Subgroup Analyses**
-Includes detailed results from subgroup analyses conducted across different geographical groups.
+1.3 **Meta Analyses**
+Includes detailed results from nationwide meta-analyses and subgroup analyses conducted across different geographical/socio-economic groups.
 
 ### 2. Sensitivity Analyses
 Contains information on the sensitivity analyses we performed to validate the robustness of our findings.
